@@ -1,15 +1,19 @@
 import os.path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
-from config import LAST_OPENED_FILE_PATH
+from tkinter import filedialog, messagebox
 from openpyxl import load_workbook
+from configparser import ConfigParser
+
+config = ConfigParser()
+config.read('config.ini')
 
 def get_file_path(ignore_last_opened_file_path=False) -> str | None:
     """Проверяет наличие файла по пути из конфига или просит выбрать файл"""
 
+    last_opened_file_path = config['DEFAULT']['last_opened_file_path']
     # если недоступен последний открываемый файл, просим юзера открыть новый файл и если он корректен,
     # перезаписываем путь в файл конфига
-    if not os.path.exists(LAST_OPENED_FILE_PATH) or ignore_last_opened_file_path:
+    if not os.path.exists(last_opened_file_path) or ignore_last_opened_file_path:
         if not ignore_last_opened_file_path:
             messagebox.showinfo(
                 title='А карточек-то нету!',
@@ -28,7 +32,7 @@ def get_file_path(ignore_last_opened_file_path=False) -> str | None:
             )
             return
     else:
-        file_path = LAST_OPENED_FILE_PATH
+        file_path = last_opened_file_path
 
     return file_path
 
@@ -48,7 +52,6 @@ class EnglishWordsLearner:
     def __init__(self):
         # основные атрибуты данных
         self.file_name = ''
-        self.file_data = None
         self.work_book = None
         self.sheet = None
         self.cards_gen = None
@@ -99,10 +102,18 @@ class EnglishWordsLearner:
                 self.btn_to_next_card.grid(column=1, row=1, padx='20')
                 self.btn_set_not_show_again_attribute.grid(column=2, row=1)
         else:
-            self.phrase_card.config(text='Нет данных для отображения. Выберите новый файл.')
+            self.cards_is_out_message(False)
 
     def get_data(self):
-        wb = load_workbook(filename=self.file_name)
+        # во избежание утечет памяти, сбрасываем текущие данные перед открытием нового файла
+        if self.work_book:
+            self.work_book.close()
+            self.work_book = None
+            self.sheet = None
+            self.cards_gen = None
+            self.current_card = []
+
+        wb = load_workbook(filename=self.file_name, keep_links=False)
         sheet = wb.active
 
         # проверка валидности данных из файла
@@ -115,14 +126,9 @@ class EnglishWordsLearner:
             self.phrase_card.config(text='Нет данных для отображения. Выберите новый файл.')
             return
 
-        with open('./config.py') as config_file:
-            lines_list = config_file.readlines()
-        for index, item in enumerate(lines_list):
-            if 'LAST_OPENED_FILE_PATH' in item:
-                lines_list[index] = f"LAST_OPENED_FILE_PATH = '{self.file_name}'\n"
-                break
-        with open('./config.py', mode='w', encoding='utf-8') as config_file:
-            config_file.writelines(lines_list)
+        config.set('DEFAULT', 'last_opened_file_path', self.file_name)
+        with open('config.ini', mode='w') as config_file:
+            config.write(config_file)
 
         if list(list(sheet.iter_cols(min_col=3, max_col=3, values_only=True))[0]).count(1) == 0:
             answer = ask_about_show_again_attribute()
@@ -142,7 +148,7 @@ class EnglishWordsLearner:
     def get_next_card(self):
         """Получает из генератора карточек следующую карточку и проверяет,
                 есть ли еще записи с признаком "показывать снова"""
-        if list(list(self.sheet.iter_cols(min_col=3, max_col=3, values_only=True))[0]).count(1) > 0:
+        if list(self.sheet.iter_cols(min_col=3, max_col=3, values_only=True))[0].count(1) > 0:
             try:
                 while True:
                     next_card = next(self.cards_gen)
@@ -151,9 +157,7 @@ class EnglishWordsLearner:
                         self.phrase_card.config(text=next_card[0].value)
                         self.translate_card.config(text='')
                         break
-                    else:
-                        continue
-            except:
+            except StopIteration:
                 answer = messagebox.askyesno(
                     'Похоже, карточки закончились',
                     'Показать текущие карточки по второму кругу?',
@@ -177,11 +181,13 @@ class EnglishWordsLearner:
             else:
                 self.cards_is_out_message()
 
-    def cards_is_out_message(self):
-        messagebox.showinfo(
-            title='Ну, раз вы так!..',
-            message='Что ж, тогда выберите другой файл с данными',
-        )
+    def cards_is_out_message(self, show_message=True):
+        if show_message:
+            messagebox.showinfo(
+                title='Ну, раз вы так!..',
+                message='Что ж, тогда выберите другой файл с данными',
+            )
+        self.current_card = []
         self.phrase_card.config(text='Нет данных для отображения. Выберите новый файл.')
         self.translate_card.config(text='')
         self.buttons_frame.forget()
@@ -192,7 +198,8 @@ class EnglishWordsLearner:
         self.get_next_card()
 
     def show_translate(self, args):
-        self.translate_card.config(text=self.current_card[1].value)
+        if self.current_card:
+            self.translate_card.config(text=self.current_card[1].value)
 
     def main(self):
         self.window.mainloop()
